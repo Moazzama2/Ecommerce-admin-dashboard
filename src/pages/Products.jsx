@@ -284,13 +284,29 @@ export default function Products() {
       return;
     }
 
+    // Both input modes end up here: pasted URLs must be absolute
+    // http(s) links — the backend Joi schema enforces the same rule.
+    const imageUrls = form.images.map((url) => url.trim()).filter(Boolean);
+    for (const url of imageUrls) {
+      let parsed = null;
+      try {
+        parsed = new URL(url);
+      } catch {
+        /* not a URL at all */
+      }
+      if (!parsed || !/^https?:$/.test(parsed.protocol)) {
+        setFormError(`"${url}" is not a valid image URL — it must start with http:// or https://.`);
+        return;
+      }
+    }
+
     const payload = {
       name: form.name.trim(),
       description,
       price: Number(form.price),
       category: form.category,
       stock: Number(form.stock) || 0,
-      images: form.images.filter((url) => url.trim()),
+      images: imageUrls,
     };
 
     saveMutation.mutate(editing ? { _id: editing._id, ...payload } : payload);
@@ -590,19 +606,36 @@ export default function Products() {
                   sx={{ mb: 1 }}
                 >
                   <Typography variant="subtitle2">Images</Typography>
-                  <Button
-                    size="small"
-                    startIcon={
-                      uploading ? <CircularProgress size={14} color="inherit" /> : <CloudUploadIcon fontSize="small" />
-                    }
-                    onClick={pickImage}
-                    disabled={uploading || form.images.length >= 10}
-                  >
-                    {uploading ? 'Uploading…' : 'Upload image'}
-                  </Button>
+
+                  {/* The two ways to add an image, side by side. */}
+                  <Stack direction="row" spacing={1}>
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      startIcon={
+                        uploading ? (
+                          <CircularProgress size={14} color="inherit" />
+                        ) : (
+                          <CloudUploadIcon fontSize="small" />
+                        )
+                      }
+                      onClick={pickImage}
+                      disabled={uploading || form.images.length >= 10}
+                    >
+                      {uploading ? 'Uploading…' : 'Upload file'}
+                    </Button>
+                    <Button
+                      size="small"
+                      startIcon={<AddIcon fontSize="small" />}
+                      onClick={addUrlField}
+                      disabled={form.images.length >= 10}
+                    >
+                      Add URL
+                    </Button>
+                  </Stack>
                 </Stack>
 
-                {/* Empty on purpose — the button above clicks it. */}
+                {/* Empty on purpose — the "Upload file" button clicks it. */}
                 <input
                   ref={fileInputRef}
                   type="file"
@@ -611,47 +644,67 @@ export default function Products() {
                   onChange={onFileSelected}
                 />
 
-                <Stack spacing={1.5}>
-                  {form.images.map((url, index) => (
-                    <Stack key={index} direction="row" spacing={1} alignItems="center">
-                      <ImageThumb url={url} />
-                      <TextField
-                        size="small"
-                        fullWidth
-                        placeholder="https://…"
-                        value={url}
-                        onChange={setImage(index)}
-                      />
-                      <IconButton
-                        color="error"
-                        onClick={() =>
-                          setForm((f) => ({
-                            ...f,
-                            images: f.images.filter((_, i) => i !== index),
-                          }))
-                        }
-                        aria-label="Remove image"
-                      >
-                        <DeleteIcon fontSize="small" />
-                      </IconButton>
-                    </Stack>
-                  ))}
-                </Stack>
-
-                {form.images.length === 0 ? (
-                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1.5 }}>
-                    No images yet — upload a file or paste a URL.
-                  </Typography>
-                ) : null}
-
-                <Button
-                  size="small"
-                  startIcon={<AddIcon />}
-                  sx={{ mt: 1 }}
-                  onClick={() => setForm((f) => ({ ...f, images: [...f.images, ''] }))}
+                {/* Drop zone: dashed panel when empty, subtle highlight once
+                    there are images — dropping a file uploads it either way. */}
+                <Box
+                  onDragOver={onImagesDragOver}
+                  onDragLeave={() => setDragOver(false)}
+                  onDrop={onImagesDrop}
+                  sx={{
+                    border: '1px dashed',
+                    borderColor: dragOver ? 'primary.main' : 'grey.300',
+                    borderRadius: 2,
+                    p: 1.5,
+                    bgcolor: dragOver ? 'action.hover' : 'transparent',
+                    transition: 'border-color .15s, background-color .15s',
+                  }}
                 >
-                  Add URL
-                </Button>
+                  {form.images.length === 0 ? (
+                    <Stack
+                      alignItems="center"
+                      spacing={0.5}
+                      sx={{ py: 2, textAlign: 'center', cursor: 'pointer' }}
+                      onClick={pickImage}
+                    >
+                      <CloudUploadIcon color="disabled" />
+                      <Typography variant="caption" color="text.secondary">
+                        Drag &amp; drop an image here, or use the buttons above.
+                      </Typography>
+                    </Stack>
+                  ) : (
+                    <Stack spacing={1.5}>
+                      {form.images.map((url, index) => (
+                        <Stack key={index} direction="row" spacing={1} alignItems="center">
+                          <ImageThumb url={url} />
+                          <TextField
+                            size="small"
+                            fullWidth
+                            placeholder="https://…"
+                            value={url}
+                            onChange={setImage(index)}
+                          />
+                          <IconButton
+                            color="error"
+                            onClick={() =>
+                              setForm((f) => ({
+                                ...f,
+                                images: f.images.filter((_, i) => i !== index),
+                              }))
+                            }
+                            aria-label="Remove image"
+                          >
+                            <DeleteIcon fontSize="small" />
+                          </IconButton>
+                        </Stack>
+                      ))}
+                    </Stack>
+                  )}
+                </Box>
+
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
+                  {form.images.length}/10 images — uploaded files go to Cloudinary;
+                  URLs can link anywhere.
+                </Typography>
               </Box>
             </Stack>
           </DialogContent>
