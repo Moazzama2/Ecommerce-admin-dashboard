@@ -27,7 +27,7 @@ import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import { getOrder, updateStatus } from '../api/orders';
 import StatusChip from '../components/StatusChip';
 import { formatMoney } from '../components/StatCard';
-import { ErrorState } from '../components/StateViews';
+import { DetailSkeleton, ErrorState } from '../components/StateViews';
 import { errorMessage } from '../api/client';
 
 const ALLOWED_TRANSITIONS = {
@@ -85,7 +85,7 @@ export default function OrderDetail() {
     onError: (err) => setToast({ severity: 'error', text: errorMessage(err) }),
   });
 
-  if (isLoading) return <Typography color="text.secondary">Loading order…</Typography>;
+  if (isLoading) return <DetailSkeleton cards={2} />;
   if (error) return <ErrorState error={error} onRetry={refetch} />;
   if (!order) return null;
 

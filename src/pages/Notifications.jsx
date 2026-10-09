@@ -8,6 +8,7 @@ import {
   CardContent,
   Chip,
   Divider,
+  MenuItem,
   Pagination,
   Stack,
   TextField,
@@ -23,6 +24,8 @@ export default function Notifications() {
 
   const [page, setPage] = useState(1);
   const [form, setForm] = useState({ title: '', body: '' });
+  // Who gets the announcement — mirrored by the broadcast endpoint.
+  const [audience, setAudience] = useState('active_accounts');
   const [formError, setFormError] = useState(null);
   const [sent, setSent] = useState(null);
 
@@ -38,7 +41,12 @@ export default function Notifications() {
     onSuccess: (result) => {
       setForm({ title: '', body: '' });
       setFormError(null);
-      setSent(`Sent to ${result.recipients} user${result.recipients === 1 ? '' : 's'}`);
+      const count = result.recipients;
+      setSent(
+        result.audience === 'devices'
+          ? `Sent to ${count} account${count === 1 ? '' : 's'} with the app installed`
+          : `Sent to ${count} active account${count === 1 ? '' : 's'}`,
+      );
       queryClient.invalidateQueries({ queryKey: ['notifications'] });
     },
     onError: (err) => setFormError(errorMessage(err)),
@@ -51,7 +59,11 @@ export default function Notifications() {
       setFormError('Title and message must be at least 3 characters.');
       return;
     }
-    mutation.mutate({ title: form.title.trim(), body: form.body.trim() });
+    mutation.mutate({
+      title: form.title.trim(),
+      body: form.body.trim(),
+      audience,
+    });
   };
 
   const rows = data?.notifications || [];
@@ -71,7 +83,9 @@ export default function Notifications() {
               New announcement
             </Typography>
             <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-              Delivered to every active account — in-app feed, live socket and push.
+              {audience === 'devices'
+                ? 'Delivered to every device that has the app installed — in-app feed, live socket and push.'
+                : 'Delivered to every active account — in-app feed, live socket and push.'}
             </Typography>
 
             {formError ? (
@@ -86,6 +100,18 @@ export default function Notifications() {
             ) : null}
 
             <Box component="form" onSubmit={submit}>
+              <TextField
+                select
+                label="Send to"
+                fullWidth
+                margin="dense"
+                value={audience}
+                onChange={(e) => setAudience(e.target.value)}
+                sx={{ mb: 1 }}
+              >
+                <MenuItem value="active_accounts">All active accounts</MenuItem>
+                <MenuItem value="devices">All devices (app installed)</MenuItem>
+              </TextField>
               <TextField
                 label="Title"
                 fullWidth
@@ -115,7 +141,11 @@ export default function Notifications() {
                 sx={{ mt: 2 }}
                 disabled={mutation.isPending}
               >
-                {mutation.isPending ? 'Sending…' : 'Send to all users'}
+                {mutation.isPending
+                  ? 'Sending…'
+                  : audience === 'devices'
+                    ? 'Send to all devices'
+                    : 'Send to all users'}
               </Button>
             </Box>
           </CardContent>

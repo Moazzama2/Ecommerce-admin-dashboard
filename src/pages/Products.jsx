@@ -1,27 +1,32 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Alert,
   Box,
   Button,
+  CircularProgress,
   Dialog,
   DialogActions,
   DialogContent,
   DialogTitle,
   IconButton,
   MenuItem,
+  Snackbar,
   Stack,
   TextField,
   Typography,
 } from '@mui/material';
 import { DataGrid } from '@mui/x-data-grid';
 import AddIcon from '@mui/icons-material/Add';
+import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import EditIcon from '@mui/icons-material/Edit';
 import DeleteIcon from '@mui/icons-material/Delete';
 import CloseIcon from '@mui/icons-material/Close';
 import { createProduct, deleteProduct, listProducts, updateProduct } from '../api/products';
+import { deleteImage, uploadImage } from '../api/uploads';
 import { listCategories } from '../api/categories';
 import ConfirmDialog from '../components/ConfirmDialog';
+import FilterBar from '../components/FilterBar';
 import PageHeader from '../components/PageHeader';
 import { errorMessage } from '../api/client';
 
@@ -33,6 +38,47 @@ const EMPTY_FORM = {
   stock: '',
   images: [],
 };
+
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // keep in sync with the backend limit
+
+/** 40px preview for an image URL; falls back to an empty tile on a 404. */
+function ImageThumb({ url }) {
+  const [failed, setFailed] = useState(false);
+  useEffect(() => setFailed(false), [url]);
+
+  if (!url || failed) {
+    return (
+      <Box
+        sx={{
+          width: 40,
+          height: 40,
+          flexShrink: 0,
+          borderRadius: 1,
+          bgcolor: 'grey.100',
+          border: '1px dashed',
+          borderColor: 'grey.300',
+        }}
+      />
+    );
+  }
+
+  return (
+    <Box
+      component="img"
+      src={url}
+      alt=""
+      onError={() => setFailed(true)}
+      sx={{
+        width: 40,
+        height: 40,
+        flexShrink: 0,
+        borderRadius: 1,
+        objectFit: 'cover',
+        bgcolor: 'grey.100',
+      }}
+    />
+  );
+}
 
 export default function Products() {
   const queryClient = useQueryClient();
@@ -46,6 +92,18 @@ export default function Products() {
   const [form, setForm] = useState(EMPTY_FORM);
   const [formError, setFormError] = useState(null);
   const [deleting, setDeleting] = useState(null);
+  // Save/delete feedback — the delete dialog closes on success, so the
+  // toast is the only place the admin sees the outcome.
+  const [toast, setToast] = useState(null);
+
+  // Cloudinary upload state for the open dialog.
+  const [uploading, setUploading] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
+  // Uploads made inside this dialog (image url -> Cloudinary publicId).
+  // Anything that never makes it onto the product is deleted on close,
+  // so cancelling a dialog never leaves orphaned assets behind.
+  const sessionUploads = useRef(new Map());
+  const fileInputRef = useRef(null);
 
   const params = {
     page: paginationModel.page + 1,
@@ -66,29 +124,118 @@ export default function Products() {
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ['products'] });
 
+  // Deletes this dialog's uploads that aren't in `keepUrls` (fire and
+  // forget — a failed cleanup must never block the UI). Called with no
+  // arguments on cancel, and with the saved images on success.
+  const discardSessionUploads = (keepUrls = []) => {
+    for (const [url, publicId] of sessionUploads.current) {
+      if (!keepUrls.includes(url)) {
+        deleteImage(publicId).catch(() => {
+          /* orphan stays behind — not worth surfacing an error */
+        });
+      }
+    }
+    sessionUploads.current = new Map();
+  };
+
+  const closeForm = () => {
+    discardSessionUploads(); // cancelling the dialog → nothing was saved
+    setFormOpen(false);
+    setEditing(null);
+  };
+
+  const pickImage = () => fileInputRef.current?.click();
+
+  const addUrlField = () =>
+    setForm((f) => (f.images.length >= 10 ? f : { ...f, images: [...f.images, ''] }));
+
+  // Shared by the file picker and drag-and-drop — one validation path.
+  const handleFile = async (file) => {
+    if (!file) return;
+
+    if (!file.type.startsWith('image/')) {
+      setFormError('That file is not an image.');
+      return;
+    }
+    if (file.size > MAX_IMAGE_BYTES) {
+      setFormError('Images must be 5 MB or smaller.');
+      return;
+    }
+    // The backend's Joi schema allows 10 images per product.
+    if (form.images.length >= 10) {
+      setFormError('A product can have at most 10 images.');
+      return;
+    }
+
+    setFormError(null);
+    setUploading(true);
+    try {
+      const image = await uploadImage(file);
+      sessionUploads.current.set(image.url, image.publicId);
+      setForm((f) => ({ ...f, images: [...f.images, image.url] }));
+    } catch (err) {
+      setFormError(errorMessage(err));
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const onFileSelected = (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = ''; // allow picking the same file again
+    handleFile(file);
+  };
+
+  // Drop a file anywhere on the image list to upload it.
+  const onImagesDragOver = (event) => {
+    event.preventDefault();
+    setDragOver(true);
+  };
+  const onImagesDrop = (event) => {
+    event.preventDefault();
+    setDragOver(false);
+    handleFile(event.dataTransfer.files?.[0]);
+  };
+
   const saveMutation = useMutation({
     mutationFn: (payload) => (editing ? updateProduct(payload) : createProduct(payload)),
-    onSuccess: () => {
+    onSuccess: (_data, payload) => {
+      const wasEditing = Boolean(editing);
       setFormOpen(false);
       setEditing(null);
       invalidate();
+      // Images that were uploaded here but stripped from the form before
+      // saving are orphans now — drop them from Cloudinary.
+      discardSessionUploads(payload.images || []);
+      setToast({
+        severity: 'success',
+        text: wasEditing ? 'Product updated' : 'Product created',
+      });
     },
     onError: (err) => setFormError(errorMessage(err)),
   });
 
   const deleteMutation = useMutation({
     mutationFn: (id) => deleteProduct(id),
-    onSuccess: () => {
+    onSuccess: (_data, id) => {
       setDeleting(null);
       invalidate();
+      setToast({ severity: 'success', text: 'Product deleted' });
     },
-    onError: (err) => setFormError(errorMessage(err)),
+    onError: (err) => {
+      const message = errorMessage(err);
+      setDeleting(null);
+      // No dialog stays open on a failed delete — surface it as a toast.
+      setToast({ severity: 'error', text: message });
+      setFormError(message);
+    },
   });
 
   const openCreate = () => {
     setEditing(null);
     setForm(EMPTY_FORM);
     setFormError(null);
+    sessionUploads.current = new Map();
     setFormOpen(true);
   };
 
@@ -103,6 +250,7 @@ export default function Products() {
       images: product.images || [],
     });
     setFormError(null);
+    sessionUploads.current = new Map();
     setFormOpen(true);
   };
 
@@ -110,14 +258,35 @@ export default function Products() {
     event.preventDefault();
     setFormError(null);
 
-    if (!form.name.trim() || form.description.trim().length < 10 || !form.category) {
-      setFormError('Name, category and a description of at least 10 characters are required.');
+    const description = form.description.trim();
+    // A NEW product needs the full 200-character description; existing ones
+    // were written before that rule and only have to stay non-empty.
+    const minDescription = editing ? 1 : 200;
+
+    if (!form.name.trim() || !form.category || description.length === 0) {
+      setFormError('Name, category and a description are required.');
+      return;
+    }
+
+    // Only leaf (sub)categories are assignable — parents are containers.
+    if (!subcategoryIds.has(form.category)) {
+      setFormError('Please choose a subcategory — parent categories cannot hold products.');
+      return;
+    }
+
+    if (description.length < minDescription) {
+      setFormError(`Description must be at least ${minDescription} characters.`);
+      return;
+    }
+
+    if (description.length > 2000) {
+      setFormError('Description must be 2000 characters or fewer.');
       return;
     }
 
     const payload = {
       name: form.name.trim(),
-      description: form.description.trim(),
+      description,
       price: Number(form.price),
       category: form.category,
       stock: Number(form.stock) || 0,
@@ -204,13 +373,23 @@ export default function Products() {
         sortable: false,
         renderCell: (params) => (
           <Stack direction="row" spacing={0.5} sx={{ py: 1 }}>
-            <IconButton size="small" onClick={() => openEdit(params.row)} aria-label="Edit">
+            <IconButton
+              size="small"
+              onClick={(event) => {
+                event.stopPropagation(); // the row itself already opens the editor
+                openEdit(params.row);
+              }}
+              aria-label="Edit"
+            >
               <EditIcon fontSize="small" />
             </IconButton>
             <IconButton
               size="small"
               color="error"
-              onClick={() => setDeleting(params.row)}
+              onClick={(event) => {
+                event.stopPropagation();
+                setDeleting(params.row);
+              }}
               aria-label="Delete"
             >
               <DeleteIcon fontSize="small" />
@@ -231,6 +410,20 @@ export default function Products() {
 
   const data = productsQuery.data;
 
+  // Products live in LEAF categories only: parents (Books, Electronics, …)
+  // are containers, so they never appear in the picker.
+  const allCategories = categoriesQuery.data || [];
+  const subcategories = allCategories.filter((c) => c.parent);
+  const subcategoryIds = new Set(subcategories.map((c) => c._id));
+  const currentIsSubcategory = subcategoryIds.has(form.category);
+  // A few older rows were saved against a parent *name* (or a plain string).
+  // Show that value, disabled, so the select never opens blank — the admin
+  // still has to pick a real subcategory before saving.
+  const legacyCategoryLabel = currentIsSubcategory
+    ? null
+    : allCategories.find((c) => c._id === form.category || c.name === form.category)?.name ||
+      form.category;
+
   return (
     <Box>
       <PageHeader
@@ -243,14 +436,14 @@ export default function Products() {
         }
       />
 
-      <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} sx={{ mb: 2 }}>
+      <FilterBar direction={{ xs: 'column', sm: 'row' }}>
         <TextField
           size="small"
           placeholder="Search name or description…"
           value={searchInput}
           onChange={(e) => setSearchInput(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && applySearch()}
-          sx={{ maxWidth: { sm: 360 }, flexGrow: { sm: 1 } }}
+          sx={{ maxWidth: { sm: 360 }, flexGrow: { sm: 1 }, width: { xs: '100%' } }}
         />
         <Button variant="outlined" onClick={applySearch}>
           Search
@@ -266,7 +459,7 @@ export default function Products() {
             Clear
           </Button>
         ) : null}
-      </Stack>
+      </FilterBar>
 
       {productsQuery.error ? (
         <Alert severity="error" sx={{ mb: 2 }}>
@@ -274,11 +467,23 @@ export default function Products() {
         </Alert>
       ) : null}
 
-      <Box sx={{ height: 600, bgcolor: 'background.paper' }}>
+      <Box
+        sx={{
+          height: 600,
+          bgcolor: 'background.paper',
+          border: '1px solid rgba(15,23,42,.08)',
+          borderRadius: '12px',
+          overflow: 'hidden',
+        }}
+      >
         <DataGrid
           rows={data?.products || []}
           columns={columns}
           getRowId={(row) => row._id}
+          // Clicking anywhere on a row opens the editor (the row action
+          // buttons stop propagation so they keep their own behaviour).
+          onRowClick={(params) => openEdit(params.row)}
+          sx={{ '& .MuiDataGrid-row': { cursor: 'pointer' } }}
           loading={productsQuery.isLoading || productsQuery.isFetching}
           paginationMode="server"
           rowCount={data?.pagination?.total ?? 0}
@@ -291,12 +496,12 @@ export default function Products() {
       </Box>
 
       {/* Create / edit dialog */}
-      <Dialog open={formOpen} onClose={() => setFormOpen(false)} maxWidth="sm" fullWidth>
+      <Dialog open={formOpen} onClose={closeForm} maxWidth="sm" fullWidth>
         <form onSubmit={submit}>
           <DialogTitle fontWeight={700}>
             {editing ? 'Edit product' : 'New product'}
             <IconButton
-              onClick={() => setFormOpen(false)}
+              onClick={closeForm}
               sx={{ position: 'absolute', right: 12, top: 12 }}
               aria-label="Close"
             >
@@ -326,8 +531,16 @@ export default function Products() {
                 minRows={3}
                 value={form.description}
                 onChange={setField('description')}
-                helperText={`${form.description.trim().length}/10 characters minimum`}
-                error={form.description.length > 0 && form.description.trim().length < 10}
+                inputProps={{ maxLength: 2000 }}
+                helperText={
+                  editing
+                    ? `${form.description.trim().length}/2000 characters`
+                    : `${form.description.trim().length}/2000 characters (min. 200)`
+                }
+                error={
+                  form.description.length > 0 &&
+                  form.description.trim().length < (editing ? 1 : 200)
+                }
               />
               <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
                 <TextField
@@ -357,20 +570,51 @@ export default function Products() {
                 value={form.category}
                 onChange={setField('category')}
               >
-                {(categoriesQuery.data || []).map((c) => (
+                {subcategories.map((c) => (
                   <MenuItem key={c._id} value={c._id}>
                     {c.name}
                   </MenuItem>
                 ))}
+                {form.category && !currentIsSubcategory ? (
+                  <MenuItem value={form.category} disabled>
+                    {legacyCategoryLabel} — pick a subcategory
+                  </MenuItem>
+                ) : null}
               </TextField>
 
               <Box>
-                <Typography variant="subtitle2" sx={{ mb: 1 }}>
-                  Image URLs
-                </Typography>
+                <Stack
+                  direction="row"
+                  alignItems="center"
+                  justifyContent="space-between"
+                  sx={{ mb: 1 }}
+                >
+                  <Typography variant="subtitle2">Images</Typography>
+                  <Button
+                    size="small"
+                    startIcon={
+                      uploading ? <CircularProgress size={14} color="inherit" /> : <CloudUploadIcon fontSize="small" />
+                    }
+                    onClick={pickImage}
+                    disabled={uploading || form.images.length >= 10}
+                  >
+                    {uploading ? 'Uploading…' : 'Upload image'}
+                  </Button>
+                </Stack>
+
+                {/* Empty on purpose — the button above clicks it. */}
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  hidden
+                  onChange={onFileSelected}
+                />
+
                 <Stack spacing={1.5}>
                   {form.images.map((url, index) => (
-                    <Stack key={index} direction="row" spacing={1}>
+                    <Stack key={index} direction="row" spacing={1} alignItems="center">
+                      <ImageThumb url={url} />
                       <TextField
                         size="small"
                         fullWidth
@@ -381,7 +625,10 @@ export default function Products() {
                       <IconButton
                         color="error"
                         onClick={() =>
-                          setForm((f) => ({ ...f, images: f.images.filter((_, i) => i !== index) }))
+                          setForm((f) => ({
+                            ...f,
+                            images: f.images.filter((_, i) => i !== index),
+                          }))
                         }
                         aria-label="Remove image"
                       >
@@ -390,19 +637,26 @@ export default function Products() {
                     </Stack>
                   ))}
                 </Stack>
+
+                {form.images.length === 0 ? (
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1.5 }}>
+                    No images yet — upload a file or paste a URL.
+                  </Typography>
+                ) : null}
+
                 <Button
                   size="small"
                   startIcon={<AddIcon />}
                   sx={{ mt: 1 }}
                   onClick={() => setForm((f) => ({ ...f, images: [...f.images, ''] }))}
                 >
-                  Add image
+                  Add URL
                 </Button>
               </Box>
             </Stack>
           </DialogContent>
           <DialogActions sx={{ px: 3, py: 2 }}>
-            <Button onClick={() => setFormOpen(false)}>Cancel</Button>
+            <Button onClick={closeForm}>Cancel</Button>
             <Button type="submit" variant="contained" disabled={saveMutation.isPending}>
               {saveMutation.isPending ? 'Saving…' : editing ? 'Save changes' : 'Create'}
             </Button>
@@ -419,6 +673,17 @@ export default function Products() {
         onClose={() => setDeleting(null)}
         onConfirm={() => deleteMutation.mutate(deleting._id)}
       />
+
+      <Snackbar
+        open={Boolean(toast)}
+        autoHideDuration={4000}
+        onClose={() => setToast(null)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+      >
+        <Alert severity={toast?.severity || 'success'} variant="filled" onClose={() => setToast(null)}>
+          {toast?.text}
+        </Alert>
+      </Snackbar>
     </Box>
   );
 }

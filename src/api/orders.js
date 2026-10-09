@@ -1,7 +1,8 @@
 import client from './client';
 
 // Admin list: server-side pagination + filters.
-// params: { page, limit, status?, sortBy?, productId? }
+// params: { page, limit, status?, sortBy?, productId?, search?, userId?, from?, to? }
+// from/to are 'YYYY-MM-DD' and both days are inclusive.
 export const listOrders = async (params) => {
   const res = await client.get('/api/orders/admin/all', { params });
   return res.data.data; // { orders, pagination }

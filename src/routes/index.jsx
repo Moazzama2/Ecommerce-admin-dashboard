@@ -9,6 +9,7 @@ import OrderDetail from '../pages/OrderDetail';
 import Products from '../pages/Products';
 import Categories from '../pages/Categories';
 import Customers from '../pages/Customers';
+import CustomerDetail from '../pages/CustomerDetail';
 import Notifications from '../pages/Notifications';
 import Profile from '../pages/Profile';
 import NotFound from '../pages/NotFound';
@@ -34,6 +35,7 @@ export default function AppRoutes() {
         <Route path="/products" element={<Products />} />
         <Route path="/categories" element={<Categories />} />
         <Route path="/customers" element={<Customers />} />
+        <Route path="/customers/:id" element={<CustomerDetail />} />
         <Route path="/notifications" element={<Notifications />} />
         <Route path="/profile" element={<Profile />} />
       </Route>

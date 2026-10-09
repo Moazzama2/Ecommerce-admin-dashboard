@@ -10,6 +10,7 @@ import {
   DialogTitle,
   IconButton,
   MenuItem,
+  Snackbar,
   Stack,
   TextField,
   Typography,
@@ -40,6 +41,9 @@ export default function Categories() {
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState({ name: '', slug: '', parent: '' });
   const [formError, setFormError] = useState(null);
+  // Save/delete feedback — the dialogs close on success, so the toast is
+  // the only place the admin sees the outcome.
+  const [toast, setToast] = useState(null);
   const [deleting, setDeleting] = useState(null);
 
   const { data: categories, isLoading, error, refetch } = useQuery({
@@ -53,11 +57,16 @@ export default function Categories() {
     mutationFn: (payload) =>
       editing ? updateCategory(editing._id, payload) : createCategory(payload),
     onSuccess: () => {
+      const wasEditing = Boolean(editing);
       setFormOpen(false);
       setEditing(null);
       invalidate();
       // Products embed their category, so refresh those too.
       queryClient.invalidateQueries({ queryKey: ['products'] });
+      setToast({
+        severity: 'success',
+        text: wasEditing ? 'Category updated' : 'Category created',
+      });
     },
     onError: (err) => setFormError(errorMessage(err)),
   });
@@ -68,10 +77,14 @@ export default function Categories() {
       setDeleting(null);
       invalidate();
       queryClient.invalidateQueries({ queryKey: ['products'] });
+      setToast({ severity: 'success', text: 'Category deleted' });
     },
     onError: (err) => {
+      const message = errorMessage(err);
       setDeleting(null);
-      setFormError(errorMessage(err));
+      // No dialog stays open on a failed delete — surface it as a toast.
+      setToast({ severity: 'error', text: message });
+      setFormError(message);
     },
   });
 
@@ -107,11 +120,42 @@ export default function Categories() {
 
   const list = categories || [];
   const byId = Object.fromEntries(list.map((c) => [c._id, c]));
-  // Flat table: top-level rows first, children indented under their parent.
-  const rows = list
-    .slice()
-    .sort((a, b) => (a.parent ? 1 : 0) - (b.parent ? 1 : 0) || a.name.localeCompare(b.name))
-    .map((c, index) => ({ id: c._id, order: index, ...c }));
+
+  // Depth-first flatten: every subcategory is emitted straight after its
+  // own parent (and its children after it), so the grid reads as a
+  // tree instead of "all top-level first, then a pile of children".
+  const rows = (() => {
+    const parentIdOf = (category) => category.parent?._id || category.parent || null;
+    const childrenOf = (parentId) =>
+      list
+        .filter((category) => parentIdOf(category) === parentId)
+        .sort((a, b) => a.name.localeCompare(b.name));
+
+    const flat = [];
+    const seen = new Set();
+
+    const walk = (parentId, depth) => {
+      for (const category of childrenOf(parentId)) {
+        if (seen.has(category._id)) continue; // cycle guard (a → b → a)
+        seen.add(category._id);
+        flat.push({ ...category, id: category._id, depth, order: flat.length });
+        walk(category._id, depth + 1);
+      }
+    };
+
+    walk(null, 0); // top-level categories, each with its own subtree
+
+    // Orphans (parent deleted) would otherwise disappear from the table.
+    list
+      .slice()
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .forEach((category) => {
+        if (seen.has(category._id)) return;
+        flat.push({ ...category, id: category._id, depth: 0, order: flat.length });
+      });
+
+    return flat;
+  })();
 
   const columns = useMemo(
     () => [
@@ -123,10 +167,10 @@ export default function Categories() {
         renderCell: (params) => (
           <Typography
             variant="body2"
-            fontWeight={params.row.parent ? 400 : 600}
-            sx={{ pl: params.row.parent ? 4 : 0 }}
+            fontWeight={params.row.depth ? 400 : 600}
+            sx={{ pl: params.row.depth * 2.5 }}
           >
-            {params.row.parent ? '↳ ' : ''}
+            {params.row.depth ? '↳ '.repeat(params.row.depth) : ''}
             {params.row.name}
           </Typography>
         ),
@@ -150,13 +194,23 @@ export default function Categories() {
         sortable: false,
         renderCell: (params) => (
           <Stack direction="row" spacing={0.5} sx={{ py: 1 }}>
-            <IconButton size="small" onClick={() => openEdit(params.row)} aria-label="Edit">
+            <IconButton
+              size="small"
+              onClick={(event) => {
+                event.stopPropagation(); // the row itself already opens the editor
+                openEdit(params.row);
+              }}
+              aria-label="Edit"
+            >
               <EditIcon fontSize="small" />
             </IconButton>
             <IconButton
               size="small"
               color="error"
-              onClick={() => setDeleting(params.row)}
+              onClick={(event) => {
+                event.stopPropagation();
+                setDeleting(params.row);
+              }}
               aria-label="Delete"
             >
               <DeleteIcon fontSize="small" />
@@ -193,10 +247,21 @@ export default function Categories() {
         </Alert>
       ) : null}
 
-      <Box sx={{ height: 560, bgcolor: 'background.paper' }}>
+      <Box
+        sx={{
+          height: 560,
+          bgcolor: 'background.paper',
+          border: '1px solid rgba(15,23,42,.08)',
+          borderRadius: '12px',
+          overflow: 'hidden',
+        }}
+      >
         <DataGrid
           rows={rows}
           columns={columns}
+          // Clicking anywhere on a row opens the editor.
+          onRowClick={(params) => openEdit(params.row)}
+          sx={{ '& .MuiDataGrid-row': { cursor: 'pointer' } }}
           loading={isLoading}
           disableRowSelectionOnClick
           hideFooter
@@ -280,6 +345,17 @@ export default function Categories() {
         onClose={() => setDeleting(null)}
         onConfirm={() => deleteMutation.mutate(deleting._id)}
       />
+
+      <Snackbar
+        open={Boolean(toast)}
+        autoHideDuration={4000}
+        onClose={() => setToast(null)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+      >
+        <Alert severity={toast?.severity || 'success'} variant="filled" onClose={() => setToast(null)}>
+          {toast?.text}
+        </Alert>
+      </Snackbar>
     </Box>
   );
 }

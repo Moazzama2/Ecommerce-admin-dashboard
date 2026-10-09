@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Alert,
@@ -24,6 +24,7 @@ import VisibilityIcon from '@mui/icons-material/Visibility';
 import { listOrders, updateStatus } from '../api/orders';
 import { connectSocket } from '../api/socket';
 import PageHeader from '../components/PageHeader';
+import FilterBar from '../components/FilterBar';
 import StatusChip from '../components/StatusChip';
 import { formatMoney } from '../components/StatCard';
 import { errorMessage } from '../api/client';
@@ -43,8 +44,18 @@ export default function Orders() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
+  // Deep-linkable filters: /orders?status=…&search=…&from=…&to=…
+  // The overview tiles and the orders chart drill in here pre-filtered.
+  const [searchParams, setSearchParams] = useSearchParams();
+
   const [paginationModel, setPaginationModel] = useState({ page: 0, pageSize: 20 });
-  const [status, setStatus] = useState('');
+  const [status, setStatus] = useState(() => searchParams.get('status') || '');
+  const [searchInput, setSearchInput] = useState(() => searchParams.get('search') || '');
+  const [search, setSearch] = useState(() => searchParams.get('search') || '');
+  const [range, setRange] = useState(() => ({
+    from: searchParams.get('from') || '',
+    to: searchParams.get('to') || '',
+  })); // placed-on window
   const [target, setTarget] = useState(null); // order being updated
   const [nextStatus, setNextStatus] = useState('');
   const [toast, setToast] = useState(null);
@@ -53,6 +64,9 @@ export default function Orders() {
     page: paginationModel.page + 1,
     limit: paginationModel.pageSize,
     ...(status ? { status } : {}),
+    ...(search ? { search } : {}),
+    ...(range.from ? { from: range.from } : {}),
+    ...(range.to ? { to: range.to } : {}),
   };
 
   const { data, isLoading, error, refetch, isFetching } = useQuery({
@@ -169,47 +183,140 @@ export default function Orders() {
     setNextStatus('');
   };
 
+  // Every filter restarts at page 1 — the window the admin is looking at
+  // changes completely, so page N of the old result set is meaningless.
+  // Active filters are mirrored into the URL (replace, so typing a search
+  // doesn't bury the Back button) to keep the view shareable and reload-safe.
+  const applyFilters = (next) => {
+    const params = {};
+    Object.entries(next).forEach(([key, value]) => {
+      if (value) params[key] = value;
+    });
+    setSearchParams(params, { replace: true });
+  };
+
+  const applySearch = () => {
+    const value = searchInput.trim();
+    setSearch(value);
+    setPaginationModel((m) => ({ ...m, page: 0 }));
+    applyFilters({ status, search: value, from: range.from, to: range.to });
+  };
+
+  const changeStatus = (event) => {
+    const value = event.target.value;
+    setStatus(value);
+    setPaginationModel((m) => ({ ...m, page: 0 }));
+    applyFilters({ status: value, search, from: range.from, to: range.to });
+  };
+
+  const setRangeField = (key) => (event) => {
+    const value = event.target.value;
+    setRange((current) => ({ ...current, [key]: value }));
+    setPaginationModel((m) => ({ ...m, page: 0 }));
+    applyFilters({
+      status,
+      search,
+      from: key === 'from' ? value : range.from,
+      to: key === 'to' ? value : range.to,
+    });
+  };
+
+  const hasFilters = Boolean(status || search || range.from || range.to);
+  const clearFilters = () => {
+    setStatus('');
+    setSearch('');
+    setSearchInput('');
+    setRange({ from: '', to: '' });
+    setPaginationModel((m) => ({ ...m, page: 0 }));
+    applyFilters({});
+  };
+
   return (
     <Box>
       <PageHeader
         title="Orders"
-        subtitle="Manage and fulfil customer orders"
+        subtitle={
+          hasFilters
+            ? `${data?.pagination?.total ?? '—'} orders match the current filters`
+            : 'Manage and fulfil customer orders'
+        }
         action={
-          <Stack direction="row" spacing={1}>
-            <FormControl size="small" sx={{ minWidth: 170 }}>
-              <InputLabel id="status-filter-label">Status</InputLabel>
-              <Select
-                labelId="status-filter-label"
-                label="Status"
-                value={status}
-                onChange={(e) => {
-                  setStatus(e.target.value);
-                  setPaginationModel((m) => ({ ...m, page: 0 }));
-                }}
-              >
-                <MenuItem value="">All statuses</MenuItem>
-                {STATUSES.map((s) => (
-                  <MenuItem key={s} value={s}>
-                    {s}
-                  </MenuItem>
-                ))}
-              </Select>
-            </FormControl>
-            <Button
-              variant="outlined"
-              startIcon={<RefreshIcon />}
-              onClick={() => refetch()}
-              disabled={isFetching}
-            >
-              Refresh
-            </Button>
-          </Stack>
+          <Button
+            variant="outlined"
+            startIcon={<RefreshIcon />}
+            onClick={() => refetch()}
+            disabled={isFetching}
+          >
+            Refresh
+          </Button>
         }
       />
 
       {error ? <Alert severity="error" sx={{ mb: 2 }}>{errorMessage(error)}</Alert> : null}
 
-      <Box sx={{ height: 620, bgcolor: 'background.paper' }}>
+      {/* Filter bar — search, status and the placed-on window */}
+      <FilterBar>
+        <TextField
+          size="small"
+          placeholder="Search order id or customer…"
+          value={searchInput}
+          onChange={(e) => setSearchInput(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && applySearch()}
+          sx={{ minWidth: 240, flexGrow: 1, maxWidth: 340 }}
+        />
+        <Button variant="outlined" onClick={applySearch}>
+          Search
+        </Button>
+        <FormControl size="small" sx={{ minWidth: 170 }}>
+          <InputLabel id="status-filter-label">Status</InputLabel>
+          <Select
+            labelId="status-filter-label"
+            label="Status"
+            value={status}
+            onChange={changeStatus}
+          >
+            <MenuItem value="">All statuses</MenuItem>
+            {STATUSES.map((s) => (
+              <MenuItem key={s} value={s}>
+                {s}
+              </MenuItem>
+            ))}
+          </Select>
+        </FormControl>
+        <TextField
+          type="date"
+          size="small"
+          label="From"
+          value={range.from}
+          onChange={setRangeField('from')}
+          slotProps={{ inputLabel: { shrink: true } }}
+          sx={{ width: 155 }}
+        />
+        <TextField
+          type="date"
+          size="small"
+          label="To"
+          value={range.to}
+          onChange={setRangeField('to')}
+          slotProps={{ inputLabel: { shrink: true } }}
+          sx={{ width: 155 }}
+        />
+        {hasFilters ? (
+          <Button size="small" color="inherit" onClick={clearFilters}>
+            Clear filters
+          </Button>
+        ) : null}
+      </FilterBar>
+
+      <Box
+        sx={{
+          height: 620,
+          bgcolor: 'background.paper',
+          border: '1px solid rgba(15,23,42,.08)',
+          borderRadius: '12px',
+          overflow: 'hidden',
+        }}
+      >
         <DataGrid
           rows={rows}
           columns={columns}

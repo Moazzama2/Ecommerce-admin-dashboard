@@ -6,7 +6,7 @@ export const listNotifications = async (params) => {
   return res.data.data; // { notifications, pagination }
 };
 
-export const broadcast = async ({ title, body }) => {
-  const res = await client.post('/api/notifications/broadcast', { title, body });
-  return res.data.data; // { recipients, title, body }
+export const broadcast = async ({ title, body, audience = 'active_accounts' }) => {
+  const res = await client.post('/api/notifications/broadcast', { title, body, audience });
+  return res.data.data; // { recipients, audience, title, body }
 };

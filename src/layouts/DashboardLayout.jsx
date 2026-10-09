@@ -17,7 +17,6 @@ import {
   Typography,
   useMediaQuery,
   useTheme,
-  Chip,
 } from '@mui/material';
 import MenuIcon from '@mui/icons-material/Menu';
 import DashboardIcon from '@mui/icons-material/Dashboard';
@@ -28,7 +27,6 @@ import PeopleIcon from '@mui/icons-material/People';
 import NotificationsIcon from '@mui/icons-material/Notifications';
 import PersonIcon from '@mui/icons-material/Person';
 import LogoutIcon from '@mui/icons-material/Logout';
-import CircleIcon from '@mui/icons-material/Circle';
 import { useAuthStore } from '../store/auth';
 import { connectSocket, disconnectSocket } from '../api/socket';
 
@@ -43,28 +41,74 @@ const NAV_ITEMS = [
   { to: '/notifications', label: 'Notifications', icon: <NotificationsIcon /> },
 ];
 
+// Friendly, human title for the top bar on every route the layout owns.
+function pageTitle(pathname) {
+  if (pathname.startsWith('/orders')) return 'Orders';
+  if (pathname.startsWith('/customers')) return 'Customers';
+  const match = NAV_ITEMS.find(({ to }) => pathname === to || pathname.startsWith(`${to}/`));
+  if (match) return match.label;
+  if (pathname.startsWith('/profile')) return 'Profile';
+  return 'Admin';
+}
+
 function NavList({ onNavigate }) {
   const location = useLocation();
 
   return (
-    <List sx={{ px: 1.5, py: 1 }}>
-      {NAV_ITEMS.map(({ to, label, icon }) => {
-        const active = location.pathname === to || location.pathname.startsWith(`${to}/`);
-        return (
-          <ListItemButton
-            key={to}
-            component={NavLink}
-            to={to}
-            onClick={onNavigate}
-            selected={active}
-            sx={{ borderRadius: 2, mb: 0.5, color: 'text.secondary', '&.Mui-selected': { color: 'primary.main' } }}
-          >
-            <ListItemIcon sx={{ minWidth: 40, color: 'inherit' }}>{icon}</ListItemIcon>
-            <ListItemText primary={label} primaryTypographyProps={{ fontWeight: 600, fontSize: 14 }} />
-          </ListItemButton>
-        );
-      })}
-    </List>
+    <>
+      <Typography
+        variant="caption"
+        color="text.secondary"
+        sx={{ px: 3, pt: 2, pb: 0.5, display: 'block', textTransform: 'uppercase', letterSpacing: '.1em', fontWeight: 700 }}
+      >
+        Menu
+      </Typography>
+      <List sx={{ px: 1.5, py: 0.5 }}>
+        {NAV_ITEMS.map(({ to, label, icon }) => {
+          const active = location.pathname === to || location.pathname.startsWith(`${to}/`);
+          return (
+            <ListItemButton
+              key={to}
+              component={NavLink}
+              to={to}
+              onClick={onNavigate}
+              selected={active}
+              sx={{
+                position: 'relative',
+                borderRadius: 2,
+                mb: 0.5,
+                py: 1,
+                color: 'text.secondary',
+                '&:hover': { color: 'primary.main' },
+                '&.Mui-selected': {
+                  color: 'primary.main',
+                  bgcolor: 'rgba(37,99,235,.08)',
+                  fontWeight: 600,
+                  '&:hover': { bgcolor: 'rgba(37,99,235,.12)' },
+                },
+                // Slim indicator bar on the active item's left edge.
+                '&.Mui-selected::before': {
+                  content: '""',
+                  position: 'absolute',
+                  left: -6,
+                  top: '22%',
+                  height: '56%',
+                  width: 3,
+                  borderRadius: 3,
+                  bgcolor: 'primary.main',
+                },
+              }}
+            >
+              <ListItemIcon sx={{ minWidth: 40, color: 'inherit' }}>{icon}</ListItemIcon>
+              <ListItemText
+                primary={label}
+                primaryTypographyProps={{ fontWeight: active ? 700 : 600, fontSize: 14 }}
+              />
+            </ListItemButton>
+          );
+        })}
+      </List>
+    </>
   );
 }
 
@@ -77,6 +121,14 @@ export default function DashboardLayout() {
 
   const [mobileOpen, setMobileOpen] = useState(false);
   const [anchorEl, setAnchorEl] = useState(null);
+
+  // Static for the session — just enough warmth to make the shell feel alive.
+  const todayLabel = new Date().toLocaleDateString(undefined, {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  });
 
   // One live connection for the whole dashboard; pages subscribe with
   // socket.on(...) and clean up on unmount.
@@ -98,8 +150,13 @@ export default function DashboardLayout() {
   const drawerContent = (
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
       <Box sx={{ px: 2.5, py: 2.5, display: 'flex', alignItems: 'center', gap: 1.5 }}>
-        <Avatar sx={{ bgcolor: 'primary.main', fontWeight: 700 }}>A</Avatar>
-        <Box>
+        <Avatar
+          variant="rounded"
+          sx={{ bgcolor: 'primary.main', fontWeight: 800, width: 40, height: 40, borderRadius: 2.5 }}
+        >
+          A
+        </Avatar>
+        <Box sx={{ minWidth: 0 }}>
           <Typography variant="subtitle1" fontWeight={700} lineHeight={1.2}>
             Admin Panel
           </Typography>
@@ -112,18 +169,31 @@ export default function DashboardLayout() {
       <NavList onNavigate={() => setMobileOpen(false)} />
       <Box sx={{ flexGrow: 1 }} />
       <Divider />
-      <List sx={{ px: 1.5, pb: 2 }}>
+      <List sx={{ px: 1.5, py: 1.5 }}>
         <ListItemButton
           component={NavLink}
           to="/profile"
           onClick={() => setMobileOpen(false)}
           selected={location.pathname === '/profile'}
-          sx={{ borderRadius: 2, color: 'text.secondary' }}
+          sx={{
+            position: 'relative',
+            borderRadius: 2,
+            color: 'text.secondary',
+            '&.Mui-selected': { color: 'primary.main', bgcolor: 'rgba(37,99,235,.08)' },
+          }}
         >
           <ListItemIcon sx={{ minWidth: 40, color: 'inherit' }}>
             <PersonIcon />
           </ListItemIcon>
-          <ListItemText primary="Profile" primaryTypographyProps={{ fontWeight: 600, fontSize: 14 }} />
+          <ListItemText
+            primary={
+              <Typography variant="body2" fontWeight={location.pathname === '/profile' ? 700 : 600}>
+                {user?.name || 'Profile'}
+              </Typography>
+            }
+            secondary={user?.role ? user.role : null}
+            secondaryTypographyProps={{ fontSize: 11, textTransform: 'capitalize' }}
+          />
         </ListItemButton>
       </List>
     </Box>
@@ -143,26 +213,47 @@ export default function DashboardLayout() {
           bgcolor: 'background.paper',
         }}
       >
-        <Toolbar>
+        <Toolbar sx={{ gap: 1, minHeight: { xs: 56, md: 64 } }}>
           {isMobile && (
             <IconButton edge="start" onClick={() => setMobileOpen(true)} aria-label="Open menu">
               <MenuIcon />
             </IconButton>
           )}
-          <Typography variant="h6" sx={{ flexGrow: 1, fontSize: 18 }}>
-            Ecommerce Admin
-          </Typography>
+          <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+            <Typography variant="h6" sx={{ fontSize: 17, lineHeight: 1.2 }}>
+              {pageTitle(location.pathname)}
+            </Typography>
+            <Typography variant="caption" color="text.secondary" sx={{ display: { xs: 'none', sm: 'block' } }}>
+              {todayLabel}
+            </Typography>
+          </Box>
 
-          <Chip
-            icon={<CircleIcon sx={{ fontSize: 10, color: 'success.main' }} />}
-            label="Live"
-            size="small"
-            variant="outlined"
-            sx={{ mr: 2, display: { xs: 'none', sm: 'flex' } }}
-          />
-
-          <IconButton onClick={(e) => setAnchorEl(e.currentTarget)} aria-label="Account menu">
-            <Avatar sx={{ width: 36, height: 36, bgcolor: 'primary.main' }}>
+          <IconButton
+            onClick={() => navigate('/notifications')}
+            aria-label="Notifications"
+            sx={{
+              border: '1px solid',
+              borderColor: 'divider',
+              borderRadius: 2.5,
+              '&:hover': { bgcolor: 'rgba(37,99,235,.06)', borderColor: 'rgba(37,99,235,.35)' },
+            }}
+          >
+            <NotificationsIcon fontSize="small" />
+          </IconButton>
+          <IconButton
+            onClick={(e) => setAnchorEl(e.currentTarget)}
+            aria-label="Account menu"
+            sx={{ ml: 0.5, p: 0.5, '&:hover .MuiAvatar-root': { boxShadow: '0 0 0 3px rgba(37,99,235,.18)' } }}
+          >
+            <Avatar
+              sx={{
+                width: 36,
+                height: 36,
+                bgcolor: 'primary.main',
+                fontWeight: 700,
+                transition: 'box-shadow .18s cubic-bezier(.4,0,.2,1)',
+              }}
+            >
               {(user?.name || 'A').charAt(0).toUpperCase()}
             </Avatar>
           </IconButton>
@@ -231,12 +322,15 @@ export default function DashboardLayout() {
 
       <Box
         component="main"
+        key={location.pathname}
         sx={{
           flexGrow: 1,
           width: { md: `calc(100% - ${DRAWER_WIDTH}px)` },
           pt: { xs: 7, md: 8 },
           px: { xs: 2, sm: 3 },
           pb: 4,
+          // Soft entrance for each route change.
+          animation: 'fadeUp .3s ease both',
         }}
       >
         <Outlet />
